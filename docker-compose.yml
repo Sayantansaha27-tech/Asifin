@@ -1,0 +1,214 @@
+version: "3.9"
+
+# AsiFin — Full Stack Docker Compose
+#
+# Services:
+#   db        — PostgreSQL 16 (persistent, named volume)
+#   redis     — Redis 7 (persistent, named volume)
+#   qdrant    — Qdrant vector database (persistent, named volume)
+#   ollama    — Ollama local LLM server (persistent model weights volume)
+#   api       — AsiFin FastAPI backend (port 8100)
+#   frontend  — AsiFin React frontend (port 5173)
+#
+# Quick start:
+#   cp .env.example .env        # configure SECRET_KEY at minimum
+#   docker compose up --build
+#
+# Access:
+#   Frontend:       http://localhost:5173
+#   API:            http://localhost:8100
+#   API Docs:       http://localhost:8100/docs
+#   Health:         http://localhost:8100/health
+#   Qdrant UI:      http://localhost:6555/dashboard
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — relational store for users, workspaces, files, events, flags
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: asifin_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-asifin}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-asifin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - app_network
+
+  # ---------------------------------------------------------------------------
+  # Redis — cache, session store, future task queue
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: asifin_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - app_network
+
+  # ---------------------------------------------------------------------------
+  # Qdrant — vector database for document embeddings
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: asifin_qdrant
+    restart: unless-stopped
+    ports:
+      - "6555:6333"    # REST API + dashboard
+      - "6334:6334"    # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6333/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - app_network
+
+  # ---------------------------------------------------------------------------
+  # Ollama — local LLM server (text + vision models)
+  #
+  # After first boot, pull models:
+  #   docker exec -it asifin_ollama ollama pull qwen2.5:7b-instruct
+  #   docker exec -it asifin_ollama ollama pull qwen3-vl:2b-thinking
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: asifin_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - app_network
+
+  # ---------------------------------------------------------------------------
+  # API — AsiFin FastAPI backend
+  #
+  # Startup sequence:
+  #   1. Waits for db (healthy) + redis (healthy)
+  #   2. Runs alembic upgrade head with retry logic
+  #   3. Starts uvicorn on port 8100
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ../financial-analysis-ai
+      dockerfile: Dockerfile
+    image: asifin-api:latest
+    container_name: asifin_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override env_file values for Docker networking
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      OLLAMA_BASE_URL: http://ollama:11434
+      # Migration retry config
+      MIGRATION_RETRIES: "30"
+      MIGRATION_RETRY_DELAY: "2"
+    ports:
+      - "8100:8100"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8100/livez >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    volumes:
+      - uploads_data:/app/temp_uploads
+    networks:
+      - app_network
+
+  # ---------------------------------------------------------------------------
+  # Frontend — React + Vite dashboard
+  #
+  # Proxies /api/* to the API container — no CORS issues.
+  # Waits for the API to be healthy before starting.
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ../financial-analysis-ai
+      dockerfile: frontend/Dockerfile
+    image: asifin-frontend:latest
+    container_name: asifin_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8100
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - app_network
+
+# ---------------------------------------------------------------------------
+# Named volumes — data persists across container restarts
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  ollama_data:
+    driver: local
+  uploads_data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  app_network:
+    driver: bridge
+    name: asifin_network
