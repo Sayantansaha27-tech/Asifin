@@ -402,8 +402,8 @@ The fastest way to run the full stack. One command launches everything: API, fro
 
 ```bash
 # 1. Clone
-git clone https://github.com/your-username/asifin.git
-cd asifin
+git clone https://github.com/Sayantansaha27-tech/Asifin.git
+cd Asifin
 
 # 2. Configure secrets (required)
 cp .env.example .env
