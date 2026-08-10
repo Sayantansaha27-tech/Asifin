@@ -794,4 +794,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, code convention
 
 ## License
 
-MIT License — see LICENSE for details.
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
