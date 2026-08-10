@@ -1,6 +1,15 @@
 # AsiFin — Model-Agnostic Financial Analysis AI
 
-> **A production-grade financial analysis platform that plugs any LLM into a structured analysis pipeline — from document ingestion to investment thesis generation.**
+> **A financial analysis platform that plugs any LLM into a structured analysis pipeline — from document ingestion to investment thesis generation.**
+
+**Status:** Architecture and design documentation. The implementation is not published
+in this repository.
+
+AsiFin was built as a full-stack system: a FastAPI backend with an async task pipeline,
+a React frontend, Postgres, Qdrant for vectors, Redis, and Ollama for local inference.
+What follows documents the architecture and the reasoning behind each decision. The
+deployment topology in [`reference/`](reference/) records the service layout; it is not
+a runnable build, because the application source is not included.
 
 ---
 
@@ -11,11 +20,11 @@
 - [Feature Overview](#feature-overview)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
-- [Quick Start (Docker)](#quick-start-docker)
-- [Local Development Setup](#local-development-setup)
+- [Deployment Topology (Reference)](#deployment-topology-reference)
+- [Development Setup (Reference)](#development-setup-reference)
 - [API Reference](#api-reference)
 - [Configuration](#configuration)
-- [Testing](#testing)
+- [Testing (Reference)](#testing-reference)
 - [Observability](#observability)
 - [Deployment Notes](#deployment-notes)
 - [Contributing](#contributing)
@@ -396,57 +405,34 @@ stateDiagram-v2
 
 ---
 
-## Quick Start (Docker)
+## Deployment Topology (Reference)
 
-The fastest way to run the full stack. One command launches everything: API, frontend, Postgres, Redis, Qdrant, and Ollama.
+The stack ran as six services. The full Compose definition is in
+[`reference/docker-compose.yml`](reference/docker-compose.yml).
 
-```bash
-# 1. Clone
-git clone https://github.com/Sayantansaha27-tech/Asifin.git
-cd Asifin
+| Service | Role | Port |
+|---------|------|------|
+| `frontend` | React + Vite UI | 5173 |
+| `api` | FastAPI backend, Swagger at `/docs` | 8100 |
+| `db` | PostgreSQL 16, Alembic migrations on boot | 5432 |
+| `redis` | Async cache and queue primitive | 6379 |
+| `qdrant` | Vector store, dashboard at `/dashboard` | 6555 |
+| `ollama` | Local text and vision inference | 11434 |
 
-# 2. Configure secrets (required)
-cp .env.example .env
-# Edit .env — at minimum, set SECRET_KEY to a random 32+ character string
+On first boot the API container ran Alembic migrations with retry logic, up to 30
+attempts at 2 second intervals, to absorb Postgres not being ready yet.
 
-# 3. Launch
-docker compose up --build
-```
+Model selection was a single environment variable. `ACTIVE_MODEL_PROVIDER=local_qwen`
+routed to Ollama with `qwen2.5:7b-instruct` for text and `qwen3-vl:2b-thinking` for
+chart vision; `ACTIVE_MODEL_PROVIDER=openai` routed to GPT-4o class models. That switch
+is the design decision described in [Model Agnosticism via the Strategy
+Pattern](#1-model-agnosticism-via-the-strategy-pattern), and it required no code change.
 
-| Service | URL |
-|---------|-----|
-| Frontend | http://localhost:5173 |
-| API | http://localhost:8100 |
-| API Docs (Swagger) | http://localhost:8100/docs |
-| Health check | http://localhost:8100/health |
-| Qdrant dashboard | http://localhost:6555/dashboard |
+## Development Setup (Reference)
 
-**Note:** On first boot, the API container runs Alembic migrations automatically with retry logic (up to 30 attempts, 2s delay). This handles Postgres not being ready yet.
-
-### Using a Local LLM (Ollama)
-
-```bash
-# Pull the text model
-docker exec -it asifin_ollama ollama pull qwen2.5:7b-instruct
-
-# Pull the vision model (for chart analysis)
-docker exec -it asifin_ollama ollama pull qwen3-vl:2b-thinking
-
-# Then switch the provider
-# In docker-compose.yml: ACTIVE_MODEL_PROVIDER=local_qwen
-```
-
-### Using OpenAI
-
-```bash
-# In .env
-ACTIVE_MODEL_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-```
-
----
-
-## Local Development Setup
+The commands below are recorded as they were run against the application source tree,
+which is not published here. They document the toolchain and the service layout rather
+than offering a working setup.
 
 ### Prerequisites
 - Python 3.11+
@@ -632,7 +618,7 @@ Built-in flags managed via `/admin/feature-flags`:
 
 ---
 
-## Testing
+## Testing (Reference)
 
 ### Unit + Integration Tests
 
@@ -788,9 +774,8 @@ The `depends_on` conditions in `docker-compose.yml` encode this dependency order
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, code conventions, and how to add a new LLM provider.
-
----
+This repository is documentation. There is no source here to send patches against.
+Corrections to the architecture write-up are welcome as issues.
 
 ## License
 
